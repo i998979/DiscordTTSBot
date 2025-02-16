@@ -1,6 +1,8 @@
 import asyncio
 import os
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import discord
@@ -44,8 +46,11 @@ async def speak(interaction: discord.Interaction, lang: str, accent: str, text: 
             vc = await channel.connect()
 
         # Play the speech file
-        vc.play(discord.FFmpegPCMAudio(source="speech.mp3"),
-                after=lambda e: print("Done playing."))
+        vc.play(discord.FFmpegPCMAudio(
+            source="speech.mp3",
+            before_options="-nostdin",
+            options="-filter:a 'atempo=1.2'"
+        ), after=lambda e: print("Done playing"))
         while vc.is_playing():
             await asyncio.sleep(1)
 
