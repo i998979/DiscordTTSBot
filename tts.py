@@ -26,7 +26,7 @@ async def on_ready():
     print(f'Logged in as {client.user}')
 
 @tree.command(name="speak", description="Bot joins VC and speaks the given text in the specified language.")
-async def speak(interaction: discord.Interaction, lang: str, accent: str, text: str):
+async def speak(interaction: discord.Interaction, lang: str, accent: str, text: str, play_tone: bool = False):
     await interaction.response.defer(ephemeral=True)
     await interaction.edit_original_response(content="Speaking...")
 
@@ -44,6 +44,12 @@ async def speak(interaction: discord.Interaction, lang: str, accent: str, text: 
 
         if vc is None or not vc.is_connected():
             vc = await channel.connect()
+
+        # Play tritone if enabled
+        if play_tone:
+            vc.play(discord.FFmpegPCMAudio(source="tritone.mp3"))
+            while vc.is_playing():
+                await asyncio.sleep(1)
 
         # Play the speech file
         vc.play(discord.FFmpegPCMAudio(
