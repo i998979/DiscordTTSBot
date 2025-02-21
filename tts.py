@@ -70,6 +70,20 @@ async def speak(interaction: discord.Interaction, lang: str, accent: str, text: 
 
 @client.event
 async def on_voice_state_update(member, before, after):
+    """Plays a sound when a user mutes themselves."""
+
+    if before.mute is False and after.mute is True:  # User just muted
+        vc = discord.utils.get(client.voice_clients, guild=member.guild)
+
+        # Ensure the bot is in the same voice channel
+        if vc and vc.is_connected() and vc.channel == after.channel:
+            if not vc.is_playing():
+                vc.play(discord.FFmpegPCMAudio(
+                    source="mute.mp3",
+                    before_options="-nostdin",
+                    options="-filter:a 'atempo=1.2'"
+                ))  # Play mute sound
+
     """Disconnects the bot if it is alone in the voice channel."""
     if not member.guild:  # Ensure it's a valid guild
         return
