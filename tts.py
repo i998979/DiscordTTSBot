@@ -144,7 +144,7 @@ async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: 
         await interaction.edit_original_response(
             content="Failed to generate celebrity TTS. Most likely celebrity was not found. "
                     "Refer https://api.fakeyou.com/tts/list and insert corresponding \"model_token\", "
-                    "or https://fakeyou.com/explore/weights?page_size=24&weight_type=tt2 and copy the weight from the link.")
+                    "or https://fakeyou.com/explore/weights?page_size=24&weight_type=tt2, select \"Weights\", select \"tt2\" in \"All weight types\" and copy the weight from the link.")
         return
 
     async def process_tts():
