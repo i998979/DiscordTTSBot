@@ -73,7 +73,7 @@ async def on_ready():
 
 # Speak command (Prevents playing multiple audios at the same time)
 @tree.command(name="speak", description="Bot joins VC and speaks the given text in the specified language.")
-async def speak(interaction: discord.Interaction, lang: str, accent: str, text: str, play_tone: bool = False):
+async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com', play_tone: bool = False):
     await interaction.response.defer(ephemeral=True)
     await interaction.edit_original_response(content="Speaking...")
 
