@@ -74,8 +74,8 @@ async def on_ready():
 # Speak command (Prevents playing multiple audios at the same time)
 @tree.command(name="speak", description="Bot joins VC and speaks the given text in the specified language.")
 async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com', play_tone: bool = False):
-    await interaction.response.defer(ephemeral=True)
-    await interaction.edit_original_response(content="Speaking...")
+    await interaction.response.defer()
+    await interaction.edit_original_response(content="🔉 " + text)
 
     if interaction.user.voice is None or interaction.user.voice.channel is None:
         await interaction.edit_original_response(content="You need to be in a voice channel!")
@@ -117,7 +117,7 @@ async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', 
             ), after=after_playback
         )
 
-        await interaction.edit_original_response(content="Done playing.")
+        await interaction.edit_original_response(content="✅ " + text)
 
     except ValueError:
         await interaction.edit_original_response(content="Language not supported. " + str(tts_langs()))
@@ -130,8 +130,8 @@ async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', 
 @tree.command(name="celebrity_tts", description="Generate TTS using a celebrity's voice.")
 async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: str):
     """Generates and plays TTS in a celebrity's voice using FakeYou."""
-    await interaction.response.defer(ephemeral=True)
-    await interaction.edit_original_response(content="Generating celebrity voice...")
+    await interaction.response.defer()
+    await interaction.edit_original_response(content="🔉 " + text)
 
     if interaction.user.voice is None or interaction.user.voice.channel is None:
         await interaction.edit_original_response(content="You need to be in a voice channel!")
@@ -185,7 +185,7 @@ async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: 
 
         vc.play(discord.FFmpegPCMAudio(audio_path), after=after_playback)
 
-        await interaction.edit_original_response(content="Finished playing celebrity TTS.")
+        await interaction.edit_original_response(content="✅ " + text)
 
     # Start the async task without blocking the bot
     client.loop.create_task(process_tts())
