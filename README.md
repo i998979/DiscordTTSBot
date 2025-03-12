@@ -1,5 +1,5 @@
 # DiscordTTSBot
-DiscordTTSBot is a Discord Bot that will play Text-to-Speech in voice channel upon user's command. There are 2 commands. `/speak <lang> <accent> <text> [play_tone]` speak texts in specified language and accent using Google TTS Service. `/celebrity_tts <celebrity> <text>` speak texts with specified celebrity's voice using FakeYou Text-to-Speech.
+DiscordTTSBot is a Discord Bot that will play Text-to-Speech in voice channel upon user's command. There are 2 commands. `/speak <text> [lang] [accent] [play_tone]` speak texts in specified language and accent using Google TTS Service. `/celebrity_tts <celebrity> <text>` speak texts with specified celebrity's voice using FakeYou Text-to-Speech.
 
 
 This bot is only be used in 1 guild, please host multiple instances when using in more than 1 guild.
