@@ -73,7 +73,8 @@ async def on_ready():
 
 # Speak command (Prevents playing multiple audios at the same time)
 @tree.command(name="speak", description="Bot joins VC and speaks the given text in the specified language.")
-async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com', play_tone: bool = False):
+async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com',
+                play_tone: bool = False):
     await interaction.response.defer()
     await interaction.edit_original_response(content="🔉 " + text)
 
@@ -191,6 +192,77 @@ async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: 
     client.loop.create_task(process_tts())
 
     await interaction.edit_original_response(content="TTS request submitted. Processing in the background...")
+
+
+dict_language = {
+    "中文": "all_zh",
+    "粤语": "all_yue",
+    "英文": "en",
+    "日文": "all_ja",
+    "韩文": "all_ko",
+    "中英混合": "zh",
+    "粤英混合": "yue",
+    "日英混合": "ja",
+    "韩英混合": "ko",
+    "多语种混合": "auto",  # 多语种启动切分识别语种
+    "多语种混合(粤语)": "auto_yue",
+    "all_zh": "all_zh",
+    "all_yue": "all_yue",
+    "en": "en",
+    "all_ja": "all_ja",
+    "all_ko": "all_ko",
+    "zh": "zh",
+    "yue": "yue",
+    "ja": "ja",
+    "ko": "ko",
+    "auto": "auto",
+    "auto_yue": "auto_yue",
+}
+
+
+@tree.command(name="kcr_speak", description="Generate speech using GPT-SoVITS")
+async def kcr_speak(interaction: discord.Interaction, text: str, text_language: str = "yue", cut_punc: str = ".。",
+                    top_k: int = 15, top_p: float = 1.0, temperature: float = 1.0, speed: float = 1.0,
+                    sample_steps: int = 32, if_sr: bool = False):
+    await interaction.response.defer()
+    await interaction.edit_original_response(content=f"🔉 {text_language}: {text}")
+
+    if interaction.user.voice is None or interaction.user.voice.channel is None:
+        await interaction.edit_original_response(content="You need to be in a voice channel!")
+        return
+
+    if text_language not in dict_language.values():
+        await interaction.edit_original_response(content="Invalid language. " + str(list(dict_language.values())))
+        return
+
+    response = requests.get(
+        f"http://127.0.0.1:9880?text={text}&text_language={text_language}&cut_pung={cut_punc}"
+        f"&top_k={top_k}&top_p={top_p}&temperature={temperature}&speed={speed}&sample_steps={sample_steps}&if_sr={if_sr}")
+    if response.status_code == 200:
+        with open(f"{text}.wav", "wb") as f:
+            f.write(response.content)
+
+        channel = interaction.user.voice.channel
+        vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
+
+        if vc is None or not vc.is_connected():
+            vc = await channel.connect()
+
+        while vc.is_playing():
+            await asyncio.sleep(1)
+
+        def after_playback(e):
+            if e:
+                print(f"Error playing audio: {e}")
+            if os.path.exists(f"{text}.wav"):
+                os.remove(f"{text}.wav")
+
+        vc.play(discord.FFmpegPCMAudio(f"{text}.wav"), after=after_playback)
+        await interaction.followup.send(file=discord.File(f"{text}.wav"))
+        await interaction.edit_original_response(content=f"✅ {text_language}: {text}")
+
+    else:
+        await interaction.edit_original_response(content="Error generating audio.")
 
 
 @client.event
