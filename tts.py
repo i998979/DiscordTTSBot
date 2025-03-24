@@ -227,40 +227,48 @@ async def kcr_speak(interaction: discord.Interaction, text: str, text_language: 
     await interaction.response.defer()
     await interaction.edit_original_response(content=f"🔉 {text_language}: {text}")
 
-    if interaction.user.voice is None or interaction.user.voice.channel is None:
-        await interaction.edit_original_response(content="You need to be in a voice channel!")
-        return
-
     if text_language not in dict_language.values():
         await interaction.edit_original_response(content="Invalid language. " + str(list(dict_language.values())))
         return
 
+    try:
+        requests.get(f"http://192.168.1.87:9880", timeout=3)
+    except Exception:
+        await interaction.edit_original_response(content="Error: TTS server is down.")
+        return
+
     response = requests.get(
-        f"http://127.0.0.1:9880?text={text}&text_language={text_language}&cut_pung={cut_punc}"
+        f"http://192.168.1.87:9880?text={text}&text_language={text_language}&cut_pung={cut_punc}"
         f"&top_k={top_k}&top_p={top_p}&temperature={temperature}&speed={speed}&sample_steps={sample_steps}&if_sr={if_sr}")
     if response.status_code == 200:
         with open(f"{text}.wav", "wb") as f:
             f.write(response.content)
 
-        channel = interaction.user.voice.channel
-        vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
+        if interaction.user.voice is None or interaction.user.voice.channel is None:
+            await interaction.followup.send(file=discord.File(f"{text}.wav"))
+            await interaction.edit_original_response(content=f"💾 {text_language}: {text}")
 
-        if vc is None or not vc.is_connected():
-            vc = await channel.connect()
-
-        while vc.is_playing():
-            await asyncio.sleep(1)
-
-        def after_playback(e):
-            if e:
-                print(f"Error playing audio: {e}")
             if os.path.exists(f"{text}.wav"):
                 os.remove(f"{text}.wav")
+        else:
+            channel = interaction.user.voice.channel
+            vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
 
-        vc.play(discord.FFmpegPCMAudio(f"{text}.wav"), after=after_playback)
-        await interaction.followup.send(file=discord.File(f"{text}.wav"))
-        await interaction.edit_original_response(content=f"✅ {text_language}: {text}")
+            if vc is None or not vc.is_connected():
+                vc = await channel.connect()
 
+            while vc.is_playing():
+                await asyncio.sleep(1)
+
+            def after_playback(e):
+                if e:
+                    print(f"Error playing audio: {e}")
+                if os.path.exists(f"{text}.wav"):
+                    os.remove(f"{text}.wav")
+
+            vc.play(discord.FFmpegPCMAudio(f"{text}.wav"), after=after_playback)
+            await interaction.followup.send(file=discord.File(f"{text}.wav"))
+            await interaction.edit_original_response(content=f"✅ {text_language}: {text}")
     else:
         await interaction.edit_original_response(content="Error generating audio.")
 
