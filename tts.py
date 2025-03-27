@@ -20,6 +20,7 @@ intents.voice_states = True
 
 client = commands.Bot(command_prefix="!", intents=intents)
 tree = client.tree
+# discord.opus.load_opus("opus/libopus.so")
 
 
 # Generate TTS using FakeYou API and return job token
@@ -232,13 +233,13 @@ async def kcr_speak(interaction: discord.Interaction, text: str, text_language: 
         return
 
     try:
-        requests.get(f"http://192.168.1.87:9880", timeout=3)
+        requests.get(f"{os.getenv("TTS_SERVER")}", timeout=3)
     except Exception:
         await interaction.edit_original_response(content="Error: TTS server is down.")
         return
 
     response = requests.get(
-        f"http://192.168.1.87:9880?text={text}&text_language={text_language}&cut_pung={cut_punc}"
+        f"{os.getenv("TTS_SERVER")}?text={text}&text_language={text_language}&cut_pung={cut_punc}"
         f"&top_k={top_k}&top_p={top_p}&temperature={temperature}&speed={speed}&sample_steps={sample_steps}&if_sr={if_sr}")
     if response.status_code == 200:
         with open(f"{text}.wav", "wb") as f:
