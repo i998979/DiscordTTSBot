@@ -20,7 +20,6 @@ intents.voice_states = True
 
 client = commands.Bot(command_prefix="!", intents=intents)
 tree = client.tree
-# discord.opus.load_opus("opus/libopus.so")
 
 
 # Generate TTS using FakeYou API and return job token
@@ -221,36 +220,48 @@ dict_language = {
 }
 
 
-@tree.command(name="kcr_speak", description="Generate speech using GPT-SoVITS")
-async def kcr_speak(interaction: discord.Interaction, text: str, text_language: str = "yue", cut_punc: str = ".。",
-                    top_k: int = 15, top_p: float = 1.0, temperature: float = 1.0, speed: float = 1.0,
-                    sample_steps: int = 32, if_sr: bool = False):
+async def generate_speech(interaction, text, text_language, cut_punc, top_k, top_p, temperature, speed, sample_steps,
+                          speaker):
     await interaction.response.defer()
-    await interaction.edit_original_response(content=f"🔉 {text_language}: {text}")
+    await interaction.edit_original_response(content=f"🎧 {text_language}: {text}")
 
     if text_language not in dict_language.values():
         await interaction.edit_original_response(content="Invalid language. " + str(list(dict_language.values())))
         return
 
     try:
-        requests.get(f"{os.getenv("TTS_SERVER")}", timeout=3)
-    except Exception:
+        requests.get(f"{os.getenv('TTS_SERVER')}", timeout=3)
+    except Exception as e:
         await interaction.edit_original_response(content="Error: TTS server is down.")
+        print(e)
         return
 
-    response = requests.get(
-        f"{os.getenv("TTS_SERVER")}?text={text}&text_language={text_language}&cut_pung={cut_punc}"
-        f"&top_k={top_k}&top_p={top_p}&temperature={temperature}&speed={speed}&sample_steps={sample_steps}&if_sr={if_sr}")
+    if speaker == 'KCR':
+        set_model = f"{os.getenv('TTS_SERVER')}/set_model?gpt_model_path={os.getenv('KCR_GPT')}&sovits_model_path={os.getenv('KCR_SOVITS')}"
+    else:
+        set_model = f"{os.getenv('TTS_SERVER')}/set_model?gpt_model_path={os.getenv('MTR_GPT')}&sovits_model_path={os.getenv('MTR_SOVITS')}"
+    print(set_model)
+
+    api = (f"{os.getenv('TTS_SERVER')}?text={text}&text_language={text_language}&cut_punc={cut_punc}"
+           f"&top_k={top_k}&top_p={top_p}&temperature={temperature}&speed={speed}&sample_steps={sample_steps}")
+
+    if speaker == 'KCR':
+        api += f"&refer_wav_path={os.getenv('KCR_REFERENCE')}&prompt_text={os.getenv('KCR_REF_TEXT')}&prompt_language=yue"
+    else:
+        api += f"&refer_wav_path={os.getenv('MTR_REFERENCE')}&prompt_text={os.getenv('MTR_REF_TEXT')}&prompt_language=yue"
+    print(api)
+
+    requests.get(set_model)
+    response = requests.get(api)
+
     if response.status_code == 200:
-        with open(f"{text}.wav", "wb") as f:
+        filename = f"{text}.wav"
+        with open(filename, "wb") as f:
             f.write(response.content)
 
         if interaction.user.voice is None or interaction.user.voice.channel is None:
-            await interaction.followup.send(file=discord.File(f"{text}.wav"))
+            await interaction.followup.send(file=discord.File(filename))
             await interaction.edit_original_response(content=f"💾 {text_language}: {text}")
-
-            if os.path.exists(f"{text}.wav"):
-                os.remove(f"{text}.wav")
         else:
             channel = interaction.user.voice.channel
             vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
@@ -264,14 +275,30 @@ async def kcr_speak(interaction: discord.Interaction, text: str, text_language: 
             def after_playback(e):
                 if e:
                     print(f"Error playing audio: {e}")
-                if os.path.exists(f"{text}.wav"):
-                    os.remove(f"{text}.wav")
+                if os.path.exists(filename):
+                    os.remove(filename)
 
-            vc.play(discord.FFmpegPCMAudio(f"{text}.wav"), after=after_playback)
-            await interaction.followup.send(file=discord.File(f"{text}.wav"))
+            vc.play(discord.FFmpegPCMAudio(filename), after=after_playback)
+            await interaction.followup.send(file=discord.File(filename))
             await interaction.edit_original_response(content=f"✅ {text_language}: {text}")
     else:
         await interaction.edit_original_response(content="Error generating audio.")
+
+
+@tree.command(name="kcr_speak", description="Generate speech using GPT-SoVITS")
+async def kcr_speak(interaction: discord.Interaction, text: str, text_language: str = "yue", cut_punc: str = ".。",
+                    top_k: int = 15, top_p: float = 1.0, temperature: float = 1.0, speed: float = 1.0,
+                    sample_steps: int = 32):
+    await generate_speech(interaction, text, text_language, cut_punc, top_k, top_p, temperature, speed, sample_steps,
+                          'KCR')
+
+
+@tree.command(name="mtr_speak", description="Generate speech using GPT-SoVITS")
+async def mtr_speak(interaction: discord.Interaction, text: str, text_language: str = "yue", cut_punc: str = ".。",
+                    top_k: int = 15, top_p: float = 1.0, temperature: float = 1.0, speed: float = 1.0,
+                    sample_steps: int = 32):
+    await generate_speech(interaction, text, text_language, cut_punc, top_k, top_p, temperature, speed, sample_steps,
+                          'MTR')
 
 
 @client.event
