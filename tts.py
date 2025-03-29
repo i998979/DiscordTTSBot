@@ -255,12 +255,12 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
     response = requests.get(api)
 
     if response.status_code == 200:
-        filename = f"{text}.wav"
+        filename = "speak.wav"
         with open(filename, "wb") as f:
             f.write(response.content)
 
         if interaction.user.voice is None or interaction.user.voice.channel is None:
-            await interaction.followup.send(file=discord.File(filename))
+            await interaction.followup.send(file=discord.File(filename, filename=f"{text}.wav"))
             await interaction.edit_original_response(content=f"💾 {text_language}: {text}")
         else:
             channel = interaction.user.voice.channel
@@ -279,7 +279,7 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
                     os.remove(filename)
 
             vc.play(discord.FFmpegPCMAudio(filename), after=after_playback)
-            await interaction.followup.send(file=discord.File(filename))
+            await interaction.followup.send(file=discord.File(filename, filename=f"{text}.wav"))
             await interaction.edit_original_response(content=f"✅ {text_language}: {text}")
     else:
         await interaction.edit_original_response(content="Error generating audio.")
