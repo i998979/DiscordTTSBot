@@ -2,24 +2,63 @@ import asyncio
 import os
 import time
 
-import requests
-from dotenv import load_dotenv
-
-load_dotenv()
-
+import aiohttp
 import discord
-from discord.ext import commands
+import requests
+from discord import app_commands
+from dotenv import load_dotenv
 from gtts import gTTS, gTTSError
 from gtts.lang import tts_langs
 
+load_dotenv()
 TOKEN = os.getenv('TOKEN')
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 intents.voice_states = True
 
-client = commands.Bot(command_prefix="!", intents=intents)
-tree = client.tree
+client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
+
+audio_queue = asyncio.Queue()
+is_playing = False
+
+
+@client.event
+async def on_ready():
+    await tree.sync()
+    await tree.sync(guild=discord.Object(id=os.getenv('GUILD')))
+    print(f'Logged in as {client.user}')
+
+
+# Speak command (Prevents playing multiple audios at the same time)
+@tree.command(name="speak", description="Bot joins VC and speaks the given text in the specified language.")
+async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com',
+                play_tone: bool = False):
+    await interaction.response.defer()
+    await interaction.edit_original_response(content="🔉 " + text)
+
+    if interaction.user.voice is None or interaction.user.voice.channel is None:
+        await interaction.edit_original_response(content="You need to be in a voice channel!")
+        return
+
+    try:
+        tts = gTTS(text, lang=lang, tld=accent)
+        timestamp = str(int(time.time() * 1000))
+        audio_path = f"{timestamp}.mp3"
+        tts.save(audio_path)
+
+        if play_tone:
+            # Optional: enqueue tritone first
+            await enqueue_audio(interaction, "tritone.mp3", is_temp=False)
+
+        # Enqueue generated audio
+        await enqueue_audio(interaction, audio_path)
+    except ValueError:
+        await interaction.edit_original_response(content="Language not supported. " + str(tts_langs()))
+    except gTTSError:
+        await interaction.edit_original_response(
+            content="Accent not supported. https://gtts.readthedocs.io/en/latest/module.html#localized-accents")
 
 
 # Generate TTS using FakeYou API and return job token
@@ -64,134 +103,44 @@ async def wait_for_tts(job_token):
     return None
 
 
-@client.event
-async def on_ready():
-    await tree.sync()
-    await tree.sync(guild=discord.Object(id=os.getenv('GUILD')))
-    print(f'Logged in as {client.user}')
-
-
-# Speak command (Prevents playing multiple audios at the same time)
-@tree.command(name="speak", description="Bot joins VC and speaks the given text in the specified language.")
-async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com',
-                play_tone: bool = False):
-    await interaction.response.defer()
-    await interaction.edit_original_response(content="🔉 " + text)
-
-    if interaction.user.voice is None or interaction.user.voice.channel is None:
-        await interaction.edit_original_response(content="You need to be in a voice channel!")
-        return
-
-    try:
-        tts = gTTS(text, lang=lang, tld=accent)
-        tts.save("speech.mp3")
-
-        channel = interaction.user.voice.channel
-        vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
-
-        if vc is None or not vc.is_connected():
-            vc = await channel.connect()
-
-        # 🔹 **Wait until previous audio finishes before playing a new one**
-        while vc.is_playing():
-            await asyncio.sleep(1)
-
-        # Play tritone if enabled
-        if play_tone:
-            vc.play(discord.FFmpegPCMAudio(source="tritone.mp3"))
-            while vc.is_playing():
-                await asyncio.sleep(1)
-
-        def after_playback(e):
-            """Callback function to remove the file after playback."""
-            if e:
-                print(f"Error during playback: {e}")
-            if os.path.exists("speech.mp3"):
-                os.remove("speech.mp3")
-
-        # Play the speech file
-        vc.play(
-            discord.FFmpegPCMAudio(
-                source="speech.mp3",
-                before_options="-nostdin",
-                options="-filter:a 'atempo=1.2'"
-            ), after=after_playback
-        )
-
-        await interaction.edit_original_response(content="✅ " + text)
-
-    except ValueError:
-        await interaction.edit_original_response(content="Language not supported. " + str(tts_langs()))
-    except gTTSError:
-        await interaction.edit_original_response(
-            content="Accent not supported. https://gtts.readthedocs.io/en/latest/module.html#localized-accents")
-
-
 # Discord command to generate and play celebrity TTS
 @tree.command(name="celebrity_tts", description="Generate TTS using a celebrity's voice.")
 async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: str):
     """Generates and plays TTS in a celebrity's voice using FakeYou."""
     await interaction.response.defer()
-    await interaction.edit_original_response(content="🔉 " + text)
+    await interaction.edit_original_response(content=f"🔄 {text}")
 
     if interaction.user.voice is None or interaction.user.voice.channel is None:
-        await interaction.edit_original_response(content="You need to be in a voice channel!")
-        return
+        return await interaction.edit_original_response(content="You need to be in a voice channel!")
 
     voice_id = celebrity  # Using voice ID directly
     job_token = await generate_tts(text, voice_id)
 
     if not job_token:
-        await interaction.edit_original_response(
-            content="Failed to generate celebrity TTS. Most likely celebrity was not found. "
-                    "Refer https://api.fakeyou.com/tts/list and insert corresponding \"model_token\", "
-                    "or https://fakeyou.com/explore/weights?page_size=24&weight_type=tt2, select \"Weights\", select \"tt2\" in \"All weight types\" and copy the weight from the link.")
-        return
+        return await interaction.edit_original_response(
+            content="❌ Failed to generate celebrity TTS. Most likely celebrity was not found.\n\n"
+                    "Refer https://api.fakeyou.com/tts/list and insert the corresponding \"model_token\",\n"
+                    "or visit https://fakeyou.com/explore/weights?page_size=24&weight_type=tt2, "
+                    "select a voice, and copy the token from the URL.")
 
-    async def process_tts():
-        """Handle the TTS processing in a separate task."""
-        audio_url = await wait_for_tts(job_token)
+    audio_url = await wait_for_tts(job_token)
 
-        if not audio_url:
-            await interaction.edit_original_response(content="TTS generation failed or timed out.")
-            return
+    if not audio_url:
+        return await interaction.edit_original_response(content="❌ TTS generation failed or timed out.")
 
-        # Download the TTS file
-        audio_path = "celebrity_tts.mp3"
-        try:
-            audio_data = requests.get(audio_url).content
-            with open(audio_path, "wb") as f:
-                f.write(audio_data)
-        except Exception as e:
-            await interaction.edit_original_response(content=f"Failed to download audio: {e}")
-            return
+    # Download the TTS file
+    timestamp = str(int(time.time() * 1000))
+    audio_path = f"{timestamp}.mp3"
 
-        # Play the TTS in voice chat
-        channel = interaction.user.voice.channel
-        vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
+    try:
+        audio_data = requests.get(audio_url).content
+        with open(audio_path, "wb") as f:
+            f.write(audio_data)
+    except Exception as e:
+        return await interaction.edit_original_response(content=f"❌ Failed to download audio: {e}")
 
-        if vc is None or not vc.is_connected():
-            vc = await channel.connect()
-
-        # 🔹 **Wait until the bot is not playing before playing new audio**
-        while vc.is_playing():
-            await asyncio.sleep(1)
-
-        def after_playback(e):
-            """Callback function for when playback finishes."""
-            if e:
-                print(f"Error during playback: {e}")
-            if os.path.exists(audio_path):
-                os.remove(audio_path)  # Clean up the file
-
-        vc.play(discord.FFmpegPCMAudio(audio_path), after=after_playback)
-
-        await interaction.edit_original_response(content="✅ " + text)
-
-    # Start the async task without blocking the bot
-    client.loop.create_task(process_tts())
-
-    await interaction.edit_original_response(content="TTS request submitted. Processing in the background...")
+    # Enqueue the audio (VC connection + cleanup handled by the queue system)
+    await enqueue_audio(interaction, audio_path, is_temp=True)
 
 
 dict_language = {
@@ -219,70 +168,134 @@ dict_language = {
     "auto_yue": "auto_yue",
 }
 
+tts_lock = asyncio.Lock()
+
 
 async def generate_speech(interaction, text, text_language, cut_punc, top_k, top_p, temperature, speed, sample_steps,
                           speaker):
-    await interaction.response.defer()
-    await interaction.edit_original_response(content=f"🎧 {text_language}: {text}")
+    try:
+        await interaction.response.defer()
+        await interaction.edit_original_response(content=f"🎧 {text_language}: {text}")
+    except discord.NotFound as e:
+        print(f"❗ Error handling interaction: {e}")
+        return
 
     if text_language not in dict_language.values():
-        await interaction.edit_original_response(content="Invalid language. " + str(list(dict_language.values())))
-        return
+        return await interaction.edit_original_response(
+            content=f"Invalid language. Choose from: {list(dict_language.values())}")
+
+    tts_server = os.getenv("TTS_SERVER")
 
     try:
-        requests.get(f"{os.getenv('TTS_SERVER')}", timeout=3)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(tts_server, timeout=3):
+                pass
     except Exception as e:
-        await interaction.edit_original_response(content="Error: TTS server is down.")
-        print(e)
+        print(f"❗ TTS server unreachable: {e}")
+        return await interaction.edit_original_response(content="❌ TTS server is down or unreachable.")
+
+    model_paths = {
+        "KCR": {
+            "gpt": os.getenv("KCR_GPT"),
+            "sovits": os.getenv("KCR_SOVITS"),
+            "ref_wav": os.getenv("KCR_REFERENCE"),
+            "ref_text": os.getenv("KCR_REF_TEXT")
+        },
+        "MTR": {
+            "gpt": os.getenv("MTR_GPT"),
+            "sovits": os.getenv("MTR_SOVITS"),
+            "ref_wav": os.getenv("MTR_REFERENCE"),
+            "ref_text": os.getenv("MTR_REF_TEXT")
+        }
+    }.get(speaker)
+
+    # Sequential section starts here
+    async with tts_lock:
+        set_model_url = f"{tts_server}/set_model?gpt_model_path={model_paths['gpt']}&sovits_model_path={model_paths['sovits']}"
+        print(f"[DEBUG] Set model: {set_model_url}")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(set_model_url) as response:
+                    print(f"[DEBUG] Set model response: {response.status}")
+        except Exception as e:
+            print(f"❗ Error setting model: {e}")
+            return await interaction.edit_original_response(content="❌ Failed to set TTS model.")
+
+        api_url = (
+            f"{tts_server}?text={text}&text_language={text_language}&cut_punc={cut_punc}"
+            f"&top_k={top_k}&top_p={top_p}&temperature={temperature}&speed={speed}&sample_steps={sample_steps}"
+            f"&refer_wav_path={model_paths['ref_wav']}&prompt_text={model_paths['ref_text']}&prompt_language=yue"
+        )
+        print(f"[DEBUG] TTS API: {api_url}")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url) as response:
+                    timestamp = str(int(time.time() * 1000))
+                    audio_path = f"{timestamp}.wav"
+                    with open(audio_path, "wb") as f:
+                        f.write(await response.read())
+        except Exception as e:
+            print(f"❗ Error generating audio: {e}")
+            return await interaction.edit_original_response(content="❌ Error generating audio.")
+
+    # Outside lock – enqueue audio or send file
+    await interaction.followup.send(file=discord.File(audio_path, filename=f"{text}.wav"))
+
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.edit_original_response(content=f"💾 {text_language}: {text}")
+        if os.path.exists(audio_path):
+            print(f"Removed: {audio_path}")
+            os.remove(audio_path)
+        return
+    else:
+        await enqueue_audio(interaction, audio_path)
+
+
+async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_temp=True):
+    global is_playing
+    await audio_queue.put((interaction, audio_path, is_temp))
+
+    if is_playing:
         return
 
-    if speaker == 'KCR':
-        set_model = f"{os.getenv('TTS_SERVER')}/set_model?gpt_model_path={os.getenv('KCR_GPT')}&sovits_model_path={os.getenv('KCR_SOVITS')}"
-    else:
-        set_model = f"{os.getenv('TTS_SERVER')}/set_model?gpt_model_path={os.getenv('MTR_GPT')}&sovits_model_path={os.getenv('MTR_SOVITS')}"
-    print(set_model)
+    is_playing = True
 
-    api = (f"{os.getenv('TTS_SERVER')}?text={text}&text_language={text_language}&cut_punc={cut_punc}"
-           f"&top_k={top_k}&top_p={top_p}&temperature={temperature}&speed={speed}&sample_steps={sample_steps}")
+    while not audio_queue.empty():
+        interaction, audio_path, is_temp = await audio_queue.get()
+        channel = interaction.user.voice.channel
 
-    if speaker == 'KCR':
-        api += f"&refer_wav_path={os.getenv('KCR_REFERENCE')}&prompt_text={os.getenv('KCR_REF_TEXT')}&prompt_language=yue"
-    else:
-        api += f"&refer_wav_path={os.getenv('MTR_REFERENCE')}&prompt_text={os.getenv('MTR_REF_TEXT')}&prompt_language=yue"
-    print(api)
+        vc = discord.utils.get(interaction.client.voice_clients, guild=interaction.guild)
+        if vc is None or not vc.is_connected():
+            vc = await channel.connect()
 
-    requests.get(set_model)
-    response = requests.get(api)
+        def after_play(error):
+            async def update_response():
+                await interaction.edit_original_response(content=f"✅ {content[1:]}")
 
-    if response.status_code == 200:
-        filename = "speak.wav"
-        with open(filename, "wb") as f:
-            f.write(response.content)
+                if is_temp and os.path.exists(audio_path):
+                    os.remove(audio_path)
+                    print(f"Removed: {audio_path}")
 
-        if interaction.user.voice is None or interaction.user.voice.channel is None:
-            await interaction.followup.send(file=discord.File(filename, filename=f"{text}.wav"))
-            await interaction.edit_original_response(content=f"💾 {text_language}: {text}")
-        else:
-            channel = interaction.user.voice.channel
-            vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
+            asyncio.run_coroutine_threadsafe(update_response(), interaction.client.loop)
 
-            if vc is None or not vc.is_connected():
-                vc = await channel.connect()
+            if error:
+                print(f"Playback error: {error}")
 
-            while vc.is_playing():
-                await asyncio.sleep(1)
+        try:
+            message = await interaction.original_response()
+            content = message.content
+            await interaction.edit_original_response(content=f"🔉 {content[1:]}")
+            vc.play(discord.FFmpegPCMAudio(audio_path), after=after_play)
+        except Exception as e:
+            print(f"Error during audio playback: {e}")
+            if is_temp and os.path.exists(audio_path):
+                os.remove(audio_path)
+            continue
 
-            def after_playback(e):
-                if e:
-                    print(f"Error playing audio: {e}")
-                if os.path.exists(filename):
-                    os.remove(filename)
+        while vc.is_playing():
+            await asyncio.sleep(1)
 
-            vc.play(discord.FFmpegPCMAudio(filename), after=after_playback)
-            await interaction.followup.send(file=discord.File(filename, filename=f"{text}.wav"))
-            await interaction.edit_original_response(content=f"✅ {text_language}: {text}")
-    else:
-        await interaction.edit_original_response(content="Error generating audio.")
+    is_playing = False
 
 
 @tree.command(name="kcr_speak", description="Generate speech using GPT-SoVITS")
