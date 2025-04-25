@@ -36,7 +36,7 @@ async def on_ready():
 async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com',
                 play_tone: bool = False):
     await interaction.response.defer()
-    await interaction.edit_original_response(content="🔉 " + text)
+    await interaction.edit_original_response(content="🎧 " + text)
 
     if interaction.user.voice is None or interaction.user.voice.channel is None:
         await interaction.edit_original_response(content="You need to be in a voice channel!")
@@ -270,7 +270,7 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
 
         def after_play(error):
             async def update_response():
-                await interaction.edit_original_response(content=f"✅ {content[1:]}")
+                await interaction.edit_original_response(content=f"✅ {content[2:]}")
 
                 if is_temp and os.path.exists(audio_path):
                     os.remove(audio_path)
@@ -284,7 +284,7 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
         try:
             message = await interaction.original_response()
             content = message.content
-            await interaction.edit_original_response(content=f"🔉 {content[1:]}")
+            await interaction.edit_original_response(content=f"🔉 {content[2:]}")
             vc.play(discord.FFmpegPCMAudio(audio_path), after=after_play)
         except Exception as e:
             print(f"Error during audio playback: {e}")
