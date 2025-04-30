@@ -211,10 +211,14 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
 
     # Sequential section starts here
     async with tts_lock:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
+        }
+
         set_model_url = f"{tts_server}/set_model?gpt_model_path={model_paths['gpt']}&sovits_model_path={model_paths['sovits']}"
         print(f"[DEBUG] Set model: {set_model_url}")
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(set_model_url) as response:
                     print(f"[DEBUG] Set model response: {response.status}")
         except Exception as e:
@@ -228,7 +232,15 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
         )
         print(f"[DEBUG] TTS API: {api_url}")
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get( f"{tts_server}?text=test&text_language={text_language}") as response:
+                    timestamp = str(int(time.time() * 1000))
+                    audio_path = f"{timestamp}.wav"
+                    # with open(audio_path, "wb") as f:
+                    #     f.write(await response.read())
+
+
+            async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(api_url) as response:
                     timestamp = str(int(time.time() * 1000))
                     audio_path = f"{timestamp}.wav"
