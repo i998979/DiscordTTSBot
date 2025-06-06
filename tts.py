@@ -42,11 +42,12 @@ async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', 
         await interaction.edit_original_response(content="You need to be in a voice channel!")
         return
 
+    timestamp = str(int(time.time() * 1000))
+    audio_path = f"{timestamp}.mp3"
+
     try:
-        tts = gTTS(text, lang=lang, tld=accent)
-        timestamp = str(int(time.time() * 1000))
-        audio_path = f"{timestamp}.mp3"
-        tts.save(audio_path)
+        # Run the blocking gTTS code in a background thread without a helper
+        await asyncio.to_thread(lambda: gTTS(text, lang=lang, tld=accent).save(audio_path))
 
         if play_tone:
             # Optional: enqueue tritone first
@@ -233,12 +234,11 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
         print(f"[DEBUG] TTS API: {api_url}")
         try:
             async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get( f"{tts_server}?text=test&text_language={text_language}") as response:
+                async with session.get(f"{tts_server}?text=test&text_language={text_language}") as response:
                     timestamp = str(int(time.time() * 1000))
                     audio_path = f"{timestamp}.wav"
                     # with open(audio_path, "wb") as f:
                     #     f.write(await response.read())
-
 
             async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(api_url) as response:
