@@ -354,4 +354,56 @@ async def on_voice_state_update(member, before, after):
             print("Bot disconnected due to an empty voice channel.")
 
 
+@client.event
+async def on_message(message: discord.Message):
+    # Ignore messages from the bot itself
+    if message.author == client.user:
+        return
+
+    # Check if the bot is directly mentioned (@TTS Bot only)
+    if client.user.mentioned_in(message) and len(message.mentions) == 1 and message.mentions[0] == client.user:
+        # Ensure the author is in a voice channel
+        if message.author.voice is None or message.author.voice.channel is None:
+            await message.channel.send("You need to be in a voice channel!")
+            return
+
+        # Look for an audio attachment
+        audio_file = None
+        for attachment in message.attachments:
+            if attachment.filename.lower().endswith((".mp3", ".wav", ".ogg", ".flac", ".m4a")):
+                audio_file = f"{int(time.time() * 1000)}_{attachment.filename}"
+                await attachment.save(audio_file)
+                break
+
+        if not audio_file:
+            await message.channel.send("Please attach an audio file to play.")
+            return
+
+        # Build a fake Interaction-like object so enqueue_audio works
+        class FakeInteraction:
+            def __init__(self, message, audio_file):
+                self.user = message.author
+                self.guild = message.guild
+                self.client = client
+                self._original_message = None
+                self._content = f"🔉 {attachment.filename}"
+
+            async def original_response(self):
+                if self._original_message is None:
+                    self._original_message = await message.channel.send(self._content)
+                return self._original_message
+
+            async def edit_original_response(self, content):
+                if self._original_message:
+                    await self._original_message.edit(content=content)
+                else:
+                    self._original_message = await message.channel.send(content)
+                self._content = content
+
+        fake_interaction = FakeInteraction(message, audio_file)
+
+        # Enqueue the audio (so cleanup + playback flow is consistent)
+        await enqueue_audio(fake_interaction, audio_file, is_temp=True)
+
+
 client.run(TOKEN)
