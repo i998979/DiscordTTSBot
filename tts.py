@@ -222,6 +222,11 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
             async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(set_model_url) as response:
                     print(f"[DEBUG] Set model response: {response.status}")
+
+                    if not response.ok:
+                        return await interaction.edit_original_response(
+                            content=f"❌ Invalid response from {tts_server}. "
+                                    f"Open https://huggingface.co/spaces/i998979/GPT-SoVITS-CPUFast to wake it up.")
         except Exception as e:
             print(f"❗ Error setting model: {e}")
             return await interaction.edit_original_response(content="❌ Failed to set TTS model.")
