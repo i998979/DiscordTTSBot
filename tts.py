@@ -193,7 +193,7 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
                 pass
     except Exception as e:
         print(f"❗ TTS server unreachable: {e}")
-        return await interaction.edit_original_response(content="❌ TTS server is down or unreachable.")
+        return await interaction.edit_original_response(content=f"❌ TTS server is down or unreachable. Wake up the TTS server at {tts_server}.")
 
     model_paths = {
         "KCR": {
