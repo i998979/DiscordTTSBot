@@ -1,10 +1,12 @@
 import asyncio
 import os
+import re
 import time
 
 import aiohttp
 import discord
 import requests
+import yt_dlp
 from discord import app_commands
 from dotenv import load_dotenv
 from gtts import gTTS, gTTSError
@@ -22,6 +24,8 @@ tree = app_commands.CommandTree(client)
 
 audio_queue = asyncio.Queue()
 is_playing = False
+
+URL_REGEX = r'https?://[^\s]+'
 
 
 @client.event
@@ -193,7 +197,8 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
                 pass
     except Exception as e:
         print(f"❗ TTS server unreachable: {e}")
-        return await interaction.edit_original_response(content=f"❌ TTS server is down or unreachable. Wake up the TTS server at {tts_server}.")
+        return await interaction.edit_original_response(
+            content=f"❌ TTS server is down or unreachable. Wake up the TTS server at {tts_server}.")
 
     model_paths = {
         "KCR": {
@@ -372,41 +377,109 @@ async def on_message(message: discord.Message):
             await message.channel.send("You need to be in a voice channel!")
             return
 
-        # Look for an audio attachment
         audio_file = None
+        display_name = ""
+        source_type = None
+        target_attachment = None
+        target_url = None
+
+        # Check attachments
         for attachment in message.attachments:
-            if attachment.filename.lower().endswith((".mp3", ".wav", ".ogg", ".flac", ".m4a")):
-                audio_file = f"{int(time.time() * 1000)}_{attachment.filename}"
-                await attachment.save(audio_file)
+            if attachment.filename.lower().endswith((".mp3", ".wav", ".ogg", ".flac", ".m4a", ".mp4", ".mkv", ".webm")):
+                target_attachment = attachment
+                display_name = attachment.filename
+                source_type = 'attachment'
                 break
 
-        if not audio_file:
-            await message.channel.send("Please attach an audio file to play.")
+        # Check URLs
+        if not source_type:
+            urls = re.findall(URL_REGEX, message.content)
+            if urls:
+                target_url = urls[0]
+                clean_url = target_url.split('?')[0]
+
+                if any(clean_url.lower().endswith(ext) for ext in
+                       [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".mp4", ".mkv", ".webm"]):
+                    display_name = clean_url.split('/')[-1]
+                    source_type = 'direct_url'
+                else:
+                    display_name = "Youtube Audio"
+                    source_type = 'stream'
+
+        if not source_type:
+            await message.channel.send("Please attach or provide a valid audio/video link!")
             return
 
-        # Build a fake Interaction-like object so enqueue_audio works
+        timestamp = str(int(time.time() * 1000))
+        status_msg = await message.channel.send(f"📥 Processing {display_name}...")
+
+        if source_type == 'attachment':
+            audio_file = f"{timestamp}_{target_attachment.filename}"
+            await target_attachment.save(audio_file)
+
+        elif source_type == 'direct_url':
+            audio_file = f"{timestamp}.mp3"
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(target_url) as resp:
+                        if resp.status == 200:
+                            with open(audio_file, "wb") as f:
+                                f.write(await resp.read())
+                        else:
+                            audio_file = None
+            except Exception as e:
+                print(f"Error downloading direct link: {e}")
+                audio_file = None
+
+        elif source_type == 'stream':
+            audio_file = f"{timestamp}.mp3"
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'outtmpl': f"{timestamp}",
+                'quiet': True,
+                'no_warnings': True,
+            }
+
+            def download_with_ytdlp():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(target_url, download=True)
+                    return info.get('title', 'Stream Audio')
+
+            try:
+                real_title = await asyncio.to_thread(download_with_ytdlp)
+                if real_title:
+                    display_name = real_title
+                if not os.path.exists(audio_file):
+                    audio_file = None
+            except Exception as e:
+                print(f"yt-dlp download error: {e}")
+                audio_file = None
+
+        if not audio_file:
+            await status_msg.edit(content="❌ Failed to download or process the audio/video link.")
+            return
+
+        status_msg = await status_msg.edit(content=f"🔄 {display_name}")
+
         class FakeInteraction:
-            def __init__(self, message, audio_file):
-                self.user = message.author
-                self.guild = message.guild
+            def __init__(self, msg, sent_msg):
+                self.user = msg.author
+                self.guild = msg.guild
                 self.client = client
-                self._original_message = None
-                self._content = f"🔉 {attachment.filename}"
+                self._original_message = sent_msg
 
             async def original_response(self):
-                if self._original_message is None:
-                    self._original_message = await message.channel.send(self._content)
                 return self._original_message
 
             async def edit_original_response(self, content):
-                if self._original_message:
-                    await self._original_message.edit(content=content)
-                else:
-                    self._original_message = await message.channel.send(content)
-                self._content = content
+                self._original_message = await self._original_message.edit(content=content)
 
-        fake_interaction = FakeInteraction(message, audio_file)
-
+        fake_interaction = FakeInteraction(message, status_msg)
         # Enqueue the audio (so cleanup + playback flow is consistent)
         await enqueue_audio(fake_interaction, audio_file, is_temp=True)
 
