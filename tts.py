@@ -5,7 +5,6 @@ import time
 
 import aiohttp
 import discord
-import requests
 import yt_dlp
 from discord import app_commands
 from dotenv import load_dotenv
@@ -77,17 +76,19 @@ async def generate_tts(text, voice_id):
         "inference_text": text
     }
 
-    response = requests.post(url, json=payload, headers=headers)
-    print("FakeYou API Response:", response.status_code, response.text)
-
-    if response.status_code != 200:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers) as response:
+                print("FakeYou API Response:", response.status, await response.text())
+                if response.status != 200:
+                    return None
+                result = await response.json()
+                if not result.get("success"):
+                    return None
+                return result.get("inference_job_token")
+    except Exception as e:
+        print(f"Error in generate_tts: {e}")
         return None
-
-    result = response.json()
-    if not result.get("success"):
-        return None
-
-    return result["inference_job_token"]
 
 
 # Poll for the TTS job to complete asynchronously
@@ -95,15 +96,17 @@ async def wait_for_tts(job_token):
     """Poll FakeYou API to check if TTS is complete."""
     url = f"https://api.fakeyou.com/tts/job/{job_token}"
 
-    for _ in range(10):  # Retry up to 10 times
-        await asyncio.sleep(2)  # Use async sleep to avoid blocking
-        status_response = requests.get(url)
-        status_data = status_response.json()
-
-        print("Job Status:", status_data)
-
-        if status_data.get("state", {}).get("status") == "complete_success":
-            return "https://cdn-2.fakeyou.com" + status_data["state"]["maybe_public_bucket_wav_audio_path"]
+    async with aiohttp.ClientSession() as session:
+        for _ in range(10):
+            await asyncio.sleep(2)
+            try:
+                async with session.get(url) as status_response:
+                    status_data = await status_response.json()
+                    print("Job Status:", status_data)
+                    if status_data.get("state", {}).get("status") == "complete_success":
+                        return "https://cdn-2.fakeyou.com" + status_data["state"]["maybe_public_bucket_wav_audio_path"]
+            except Exception as e:
+                print(f"Error polling TTS status: {e}")
 
     return None
 
@@ -138,9 +141,13 @@ async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: 
     audio_path = f"{timestamp}.mp3"
 
     try:
-        audio_data = requests.get(audio_url).content
-        with open(audio_path, "wb") as f:
-            f.write(audio_data)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(audio_url) as resp:
+                if resp.status == 200:
+                    audio_data = await resp.read()
+                    await asyncio.to_thread(lambda: open(audio_path, "wb").write(audio_data))
+                else:
+                    return await interaction.edit_original_response(content="❌ Failed to download audio from provider.")
     except Exception as e:
         return await interaction.edit_original_response(content=f"❌ Failed to download audio: {e}")
 
@@ -244,18 +251,11 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
         print(f"[DEBUG] TTS API: {api_url}")
         try:
             async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(f"{tts_server}?text=test&text_language={text_language}") as response:
-                    timestamp = str(int(time.time() * 1000))
-                    audio_path = f"{timestamp}.wav"
-                    # with open(audio_path, "wb") as f:
-                    #     f.write(await response.read())
-
-            async with aiohttp.ClientSession(headers=headers) as session:
                 async with session.get(api_url) as response:
                     timestamp = str(int(time.time() * 1000))
                     audio_path = f"{timestamp}.wav"
-                    with open(audio_path, "wb") as f:
-                        f.write(await response.read())
+                    audio_data = await response.read()
+                    await asyncio.to_thread(lambda: open(audio_path, "wb").write(audio_data))
         except Exception as e:
             print(f"❗ Error generating audio: {e}")
             return await interaction.edit_original_response(content="❌ Error generating audio.")
@@ -290,6 +290,8 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
         if vc is None or not vc.is_connected():
             vc = await channel.connect()
 
+        play_done_event = asyncio.Event()
+
         def after_play(error):
             async def update_response():
                 await interaction.edit_original_response(content=f"✅ {content[2:]}")
@@ -299,6 +301,7 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
                     print(f"Removed: {audio_path}")
 
             asyncio.run_coroutine_threadsafe(update_response(), interaction.client.loop)
+            interaction.client.loop.call_soon_threadsafe(play_done_event.set)
 
             if error:
                 print(f"Playback error: {error}")
@@ -307,15 +310,18 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
             message = await interaction.original_response()
             content = message.content
             await interaction.edit_original_response(content=f"🔉 {content[2:]}")
-            vc.play(discord.FFmpegPCMAudio(audio_path), after=after_play)
+
+            # 使用 FFmpegOpusAudio 代替 FFmpegPCMAudio 降低 CPU 負擔
+            audio_source = await discord.FFmpegOpusAudio.from_probe(audio_path, method='fallback', options="-threads 1")
+            vc.play(audio_source, after=after_play)
         except Exception as e:
             print(f"Error during audio playback: {e}")
             if is_temp and os.path.exists(audio_path):
                 os.remove(audio_path)
             continue
 
-        while vc.is_playing():
-            await asyncio.sleep(1)
+        # 使用事件驅動取代 while 輪詢，達成 0 CPU 負擔等待
+        await play_done_event.wait()
 
     is_playing = False
 
@@ -338,28 +344,30 @@ async def mtr_speak(interaction: discord.Interaction, text: str, text_language: 
 
 @client.event
 async def on_voice_state_update(member, before, after):
-    """Plays a sound when a user mutes themselves."""
-
-    if before.mute is False and after.mute is True:  # User just muted
+    if before.mute is False and after.mute is True:
         vc = discord.utils.get(client.voice_clients, guild=member.guild)
 
         # Ensure the bot is in the same voice channel
         if vc and vc.is_connected() and vc.channel == after.channel:
             if not vc.is_playing():
-                vc.play(discord.FFmpegPCMAudio(
-                    source="mute.mp3",
-                    before_options="-nostdin",
-                    options="-filter:a 'atempo=1.2'"
-                ))  # Play mute sound
+                try:
+                    audio_source = await discord.FFmpegOpusAudio.from_probe(
+                        "mute.mp3",
+                        method='fallback',
+                        before_options="-nostdin",
+                        options="-filter:a 'atempo=1.2' -threads 1"
+                    )
+                    vc.play(audio_source)
+                except Exception as e:
+                    print(f"Mute sound error: {e}")
 
-    """Disconnects the bot if it is alone in the voice channel."""
-    if not member.guild:  # Ensure it's a valid guild
+    if not member.guild:
         return
 
     vc = discord.utils.get(client.voice_clients, guild=member.guild)
 
-    if vc and vc.is_connected():  # Ensure bot is in a voice channel
-        if len(vc.channel.members) == 1:  # Only the bot remains
+    if vc and vc.is_connected():
+        if len(vc.channel.members) == 1:
             await vc.disconnect()
             print("Bot disconnected due to an empty voice channel.")
 
@@ -423,8 +431,8 @@ async def on_message(message: discord.Message):
                 async with aiohttp.ClientSession() as session:
                     async with session.get(target_url) as resp:
                         if resp.status == 200:
-                            with open(audio_file, "wb") as f:
-                                f.write(await resp.read())
+                            data = await resp.read()
+                            await asyncio.to_thread(lambda: open(audio_file, "wb").write(data))
                         else:
                             audio_file = None
             except Exception as e:
@@ -435,11 +443,6 @@ async def on_message(message: discord.Message):
             audio_file = f"{timestamp}.mp3"
             ydl_opts = {
                 'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
                 'outtmpl': f"{timestamp}",
                 'quiet': True,
                 'no_warnings': True,
