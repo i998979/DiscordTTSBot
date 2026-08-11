@@ -34,7 +34,6 @@ async def on_ready():
     print(f'Logged in as {client.user}')
 
 
-# Speak command (Prevents playing multiple audios at the same time)
 @tree.command(name="speak", description="Bot joins VC and speaks the given text in the specified language.")
 async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', accent: str = 'com',
                 play_tone: bool = False):
@@ -49,14 +48,11 @@ async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', 
     audio_path = f"{timestamp}.mp3"
 
     try:
-        # Run the blocking gTTS code in a background thread without a helper
         await asyncio.to_thread(lambda: gTTS(text, lang=lang, tld=accent).save(audio_path))
 
         if play_tone:
-            # Optional: enqueue tritone first
             await enqueue_audio(interaction, "tritone.mp3", is_temp=False)
 
-        # Enqueue generated audio
         await enqueue_audio(interaction, audio_path)
     except ValueError:
         await interaction.edit_original_response(content="Language not supported. " + str(tts_langs()))
@@ -65,9 +61,7 @@ async def speak(interaction: discord.Interaction, text: str, lang: str = 'yue', 
             content="Accent not supported. https://gtts.readthedocs.io/en/latest/module.html#localized-accents")
 
 
-# Generate TTS using FakeYou API and return job token
 async def generate_tts(text, voice_id):
-    """Generate TTS using FakeYou API and return job token."""
     url = "https://api.fakeyou.com/tts/inference"
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -91,9 +85,7 @@ async def generate_tts(text, voice_id):
         return None
 
 
-# Poll for the TTS job to complete asynchronously
 async def wait_for_tts(job_token):
-    """Poll FakeYou API to check if TTS is complete."""
     url = f"https://api.fakeyou.com/tts/job/{job_token}"
 
     async with aiohttp.ClientSession() as session:
@@ -111,17 +103,15 @@ async def wait_for_tts(job_token):
     return None
 
 
-# Discord command to generate and play celebrity TTS
 @tree.command(name="celebrity_tts", description="Generate TTS using a celebrity's voice.")
 async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: str):
-    """Generates and plays TTS in a celebrity's voice using FakeYou."""
     await interaction.response.defer()
     await interaction.edit_original_response(content=f"🔄 {text}")
 
     if interaction.user.voice is None or interaction.user.voice.channel is None:
         return await interaction.edit_original_response(content="You need to be in a voice channel!")
 
-    voice_id = celebrity  # Using voice ID directly
+    voice_id = celebrity
     job_token = await generate_tts(text, voice_id)
 
     if not job_token:
@@ -136,7 +126,6 @@ async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: 
     if not audio_url:
         return await interaction.edit_original_response(content="❌ TTS generation failed or timed out.")
 
-    # Download the TTS file
     timestamp = str(int(time.time() * 1000))
     audio_path = f"{timestamp}.mp3"
 
@@ -151,7 +140,6 @@ async def celebrity_tts(interaction: discord.Interaction, celebrity: str, text: 
     except Exception as e:
         return await interaction.edit_original_response(content=f"❌ Failed to download audio: {e}")
 
-    # Enqueue the audio (VC connection + cleanup handled by the queue system)
     await enqueue_audio(interaction, audio_path, is_temp=True)
 
 
@@ -165,7 +153,7 @@ dict_language = {
     "粤英混合": "yue",
     "日英混合": "ja",
     "韩英混合": "ko",
-    "多语种混合": "auto",  # 多语种启动切分识别语种
+    "多语种混合": "auto",
     "多语种混合(粤语)": "auto_yue",
     "all_zh": "all_zh",
     "all_yue": "all_yue",
@@ -222,7 +210,6 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
         }
     }.get(speaker)
 
-    # Sequential section starts here
     async with tts_lock:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
@@ -260,17 +247,17 @@ async def generate_speech(interaction, text, text_language, cut_punc, top_k, top
             print(f"❗ Error generating audio: {e}")
             return await interaction.edit_original_response(content="❌ Error generating audio.")
 
-    # Outside lock – enqueue audio or send file
-    await interaction.followup.send(file=discord.File(audio_path, filename=f"{text}.wav"))
-
+    # 如果使用者不在語音頻道，直接傳送檔案並刪除
     if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.followup.send(file=discord.File(audio_path, filename=f"{text}.wav"))
         await interaction.edit_original_response(content=f"💾 {text_language}: {text}")
         if os.path.exists(audio_path):
             print(f"Removed: {audio_path}")
             os.remove(audio_path)
         return
     else:
-        await enqueue_audio(interaction, audio_path)
+        # 使用者在語音頻道，進入隊列播放（enqueue_audio 播放完畢後會自動刪除）
+        await enqueue_audio(interaction, audio_path, is_temp=True)
 
 
 async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_temp=True):
@@ -311,7 +298,6 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
             content = message.content
             await interaction.edit_original_response(content=f"🔉 {content[2:]}")
 
-            # 使用 FFmpegOpusAudio 代替 FFmpegPCMAudio 降低 CPU 負擔
             audio_source = await discord.FFmpegOpusAudio.from_probe(audio_path, method='fallback', options="-threads 1")
             vc.play(audio_source, after=after_play)
         except Exception as e:
@@ -320,7 +306,6 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
                 os.remove(audio_path)
             continue
 
-        # 使用事件驅動取代 while 輪詢，達成 0 CPU 負擔等待
         await play_done_event.wait()
 
     is_playing = False
@@ -347,7 +332,6 @@ async def on_voice_state_update(member, before, after):
     if before.mute is False and after.mute is True:
         vc = discord.utils.get(client.voice_clients, guild=member.guild)
 
-        # Ensure the bot is in the same voice channel
         if vc and vc.is_connected() and vc.channel == after.channel:
             if not vc.is_playing():
                 try:
@@ -374,13 +358,10 @@ async def on_voice_state_update(member, before, after):
 
 @client.event
 async def on_message(message: discord.Message):
-    # Ignore messages from the bot itself
     if message.author == client.user:
         return
 
-    # Check if the bot is directly mentioned (@TTS Bot only)
     if client.user.mentioned_in(message) and len(message.mentions) == 1 and message.mentions[0] == client.user:
-        # Ensure the author is in a voice channel
         if message.author.voice is None or message.author.voice.channel is None:
             await message.channel.send("You need to be in a voice channel!")
             return
@@ -391,7 +372,6 @@ async def on_message(message: discord.Message):
         target_attachment = None
         target_url = None
 
-        # Check attachments
         for attachment in message.attachments:
             if attachment.filename.lower().endswith((".mp3", ".wav", ".ogg", ".flac", ".m4a", ".mp4", ".mkv", ".webm")):
                 target_attachment = attachment
@@ -399,7 +379,6 @@ async def on_message(message: discord.Message):
                 source_type = 'attachment'
                 break
 
-        # Check URLs
         if not source_type:
             urls = re.findall(URL_REGEX, message.content)
             if urls:
@@ -483,7 +462,6 @@ async def on_message(message: discord.Message):
                 self._original_message = await self._original_message.edit(content=content)
 
         fake_interaction = FakeInteraction(message, status_msg)
-        # Enqueue the audio (so cleanup + playback flow is consistent)
         await enqueue_audio(fake_interaction, audio_file, is_temp=True)
 
 
