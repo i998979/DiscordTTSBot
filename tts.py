@@ -307,7 +307,7 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
             message = await interaction.original_response()
             content = message.content
             await interaction.edit_original_response(content=f"🔉 {content[2:]}")
-            audio_source = await discord.FFmpegOpusAudio.from_probe(audio_path, method='fallback', options="-threads 1")
+            audio_source = await discord.FFmpegOpusAudio.from_probe(audio_path, method='fallback', options="-b:a 128k -threads 1")
             vc.play(audio_source, after=after_play)
         except Exception as e:
             print(f"Error during audio playback: {e}")
@@ -350,7 +350,7 @@ async def on_voice_state_update(member, before, after):
                 vc.play(discord.FFmpegOpusAudio(
                     source="mute.mp3",
                     before_options="-nostdin",
-                    options="-filter:a 'atempo=1.2' -threads 1"
+                    options="-filter:a 'atempo=1.2' -b:a 128k -threads 1"
                 ))  # Play mute sound
 
     """Disconnects the bot if it is alone in the voice channel."""
