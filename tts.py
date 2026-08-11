@@ -307,7 +307,8 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
             message = await interaction.original_response()
             content = message.content
             await interaction.edit_original_response(content=f"🔉 {content[2:]}")
-            vc.play(discord.FFmpegPCMAudio(audio_path), after=after_play)
+            audio_source = await discord.FFmpegOpusAudio.from_probe(audio_path, method='fallback', options="-threads 1")
+            vc.play(audio_source, after=after_play)
         except Exception as e:
             print(f"Error during audio playback: {e}")
             if is_temp and os.path.exists(audio_path):
@@ -346,10 +347,10 @@ async def on_voice_state_update(member, before, after):
         # Ensure the bot is in the same voice channel
         if vc and vc.is_connected() and vc.channel == after.channel:
             if not vc.is_playing():
-                vc.play(discord.FFmpegPCMAudio(
+                vc.play(discord.FFmpegOpusAudio(
                     source="mute.mp3",
                     before_options="-nostdin",
-                    options="-filter:a 'atempo=1.2'"
+                    options="-filter:a 'atempo=1.2' -threads 1"
                 ))  # Play mute sound
 
     """Disconnects the bot if it is alone in the voice channel."""
@@ -435,11 +436,6 @@ async def on_message(message: discord.Message):
             audio_file = f"{timestamp}.mp3"
             ydl_opts = {
                 'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
                 'outtmpl': f"{timestamp}",
                 'quiet': True,
                 'no_warnings': True,
