@@ -7,6 +7,7 @@ import aiohttp
 import discord
 import requests
 import yt_dlp
+import yt_dlp_ejs
 from discord import app_commands
 from dotenv import load_dotenv
 from gtts import gTTS, gTTSError
@@ -433,10 +434,10 @@ async def on_message(message: discord.Message):
                 audio_file = None
 
         elif source_type == 'stream':
-            audio_file = f"{timestamp}.mp3"
+            audio_file = None
             ydl_opts = {
                 'format': 'bestaudio/best',
-                'outtmpl': f"{timestamp}",
+                'outtmpl': f"{timestamp}.%(ext)s",
                 'quiet': True,
                 'no_warnings': True,
             }
@@ -444,14 +445,15 @@ async def on_message(message: discord.Message):
             def download_with_ytdlp():
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(target_url, download=True)
-                    return info.get('title', 'Stream Audio')
+                    filename = ydl.prepare_filename(info)
+                    return info.get('title', 'Stream Audio'), filename
 
             try:
-                real_title = await asyncio.to_thread(download_with_ytdlp)
+                real_title, downloaded_file = await asyncio.to_thread(download_with_ytdlp)
                 if real_title:
                     display_name = real_title
-                if not os.path.exists(audio_file):
-                    audio_file = None
+                if os.path.exists(downloaded_file):
+                    audio_file = downloaded_file
             except Exception as e:
                 print(f"yt-dlp download error: {e}")
                 audio_file = None
