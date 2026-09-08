@@ -15,6 +15,8 @@ from gtts.lang import tts_langs
 
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
+CHANNEL = int(os.getenv('CHANNEL', '0'))
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -34,6 +36,30 @@ async def on_ready():
     await tree.sync()
     await tree.sync(guild=discord.Object(id=os.getenv('GUILD')))
     print(f'Logged in as {client.user}')
+
+
+# Join command
+@tree.command(name="join", description="Make the bot join your current voice channel.")
+async def join(interaction: discord.Interaction):
+    if interaction.user.voice is None or interaction.user.voice.channel is None:
+        await interaction.response.send_message("You need to be in a voice channel!")
+        return
+
+    channel = interaction.user.voice.channel
+    vc = discord.utils.get(client.voice_clients, guild=interaction.guild)
+
+    try:
+        if vc is None or not vc.is_connected():
+            await channel.connect()
+            await interaction.response.send_message(f"✅ Joined **{channel.name}**.")
+        elif vc.channel != channel:
+            await vc.move_to(channel)
+            await interaction.response.send_message(f"✅ Moved to **{channel.name}**.")
+        else:
+            await interaction.response.send_message(f"✅ Already in **{channel.name}**.")
+    except Exception as e:
+        print(f"Error joining voice channel: {e}")
+        await interaction.response.send_message(f"❌ Failed to join voice channel: {e}")
 
 
 # Speak command (Prevents playing multiple audios at the same time)
@@ -285,10 +311,17 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
 
     while not audio_queue.empty():
         interaction, audio_path, is_temp = await audio_queue.get()
-        channel = interaction.user.voice.channel
 
         vc = discord.utils.get(interaction.client.voice_clients, guild=interaction.guild)
+
         if vc is None or not vc.is_connected():
+            if interaction.user.voice is None or interaction.user.voice.channel is None:
+                print("Error during audio playback: Bot is not connected and user is not in a voice channel.")
+                if is_temp and os.path.exists(audio_path):
+                    os.remove(audio_path)
+                continue
+
+            channel = interaction.user.voice.channel
             vc = await channel.connect()
 
         def after_play(error):
@@ -308,7 +341,11 @@ async def enqueue_audio(interaction: discord.Interaction, audio_path: str, is_te
             message = await interaction.original_response()
             content = message.content
             await interaction.edit_original_response(content=f"🔉 {content[2:]}")
-            audio_source = await discord.FFmpegOpusAudio.from_probe(audio_path, method='fallback', options="-b:a 128k -threads 1")
+            audio_source = await discord.FFmpegOpusAudio.from_probe(
+                audio_path,
+                method='fallback',
+                options="-b:a 128k -threads 1"
+            )
             vc.play(audio_source, after=after_play)
         except Exception as e:
             print(f"Error during audio playback: {e}")
@@ -372,6 +409,67 @@ async def on_message(message: discord.Message):
     if message.author == client.user:
         return
 
+    # ============================================================
+    # TTS text channel
+    # ============================================================
+    #
+    # Only process messages in the configured CHANNEL.
+    # The bot must already be connected to a voice channel.
+    #
+    if message.channel.id == CHANNEL:
+        vc = discord.utils.get(client.voice_clients, guild=message.guild)
+
+        if vc and vc.is_connected():
+            text = message.content.strip()
+
+            # Ignore empty messages / attachment-only messages
+            if text:
+                timestamp = str(int(time.time() * 1000))
+                audio_path = f"{timestamp}.mp3"
+
+                try:
+                    await asyncio.to_thread(lambda: gTTS(text, lang='yue', tld='com').save(audio_path))
+
+                    status_msg = await message.channel.send(f"🎧 {text}")
+
+                    class FakeInteraction:
+                        def __init__(self, msg, sent_msg):
+                            self.user = msg.author
+                            self.guild = msg.guild
+                            self.client = client
+                            self._original_message = sent_msg
+
+                        async def original_response(self):
+                            return self._original_message
+
+                        async def edit_original_response(self, content):
+                            self._original_message = await self._original_message.edit(content=content)
+
+                    fake_interaction = FakeInteraction(message, status_msg)
+
+                    await enqueue_audio(fake_interaction, audio_path, is_temp=True)
+
+                except ValueError:
+                    print(f"❌ Google TTS language error: {text}")
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
+
+                except gTTSError as e:
+                    print(f"❌ Google TTS error: {e}")
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
+
+                except Exception as e:
+                    print(f"❌ TTS channel error: {e}")
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
+
+            return
+
+    # ============================================================
+    # Existing @mention audio processing
+    # ============================================================
+
     # Check if the bot is directly mentioned (@TTS Bot only)
     if client.user.mentioned_in(message) and len(message.mentions) == 1 and message.mentions[0] == client.user:
         # Ensure the author is in a voice channel
@@ -387,7 +485,8 @@ async def on_message(message: discord.Message):
 
         # Check attachments
         for attachment in message.attachments:
-            if attachment.filename.lower().endswith((".mp3", ".wav", ".ogg", ".flac", ".m4a", ".mp4", ".mkv", ".webm")):
+            if attachment.filename.lower().endswith(
+                    (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".mp4", ".mkv", ".webm")):
                 target_attachment = attachment
                 display_name = attachment.filename
                 source_type = 'attachment'
@@ -478,6 +577,7 @@ async def on_message(message: discord.Message):
                 self._original_message = await self._original_message.edit(content=content)
 
         fake_interaction = FakeInteraction(message, status_msg)
+
         # Enqueue the audio (so cleanup + playback flow is consistent)
         await enqueue_audio(fake_interaction, audio_file, is_temp=True)
 
