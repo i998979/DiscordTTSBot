@@ -416,7 +416,7 @@ async def on_message(message: discord.Message):
     # Only process messages in the configured CHANNEL.
     # The bot must already be connected to a voice channel.
     #
-    if message.channel.id == CHANNEL:
+    if message.channel.id == CHANNEL and not client.user.mentioned_in(message):
         vc = discord.utils.get(client.voice_clients, guild=message.guild)
 
         if vc and vc.is_connected():
