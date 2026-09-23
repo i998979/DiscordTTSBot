@@ -537,8 +537,6 @@ async def on_message(message: discord.Message):
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'outtmpl': f"{timestamp}.%(ext)s",
-                'quiet': True,
-                'no_warnings': True,
                 'cookiefile': 'cookies.txt',
             }
 
