@@ -539,6 +539,7 @@ async def on_message(message: discord.Message):
                 'outtmpl': f"{timestamp}.%(ext)s",
                 'quiet': True,
                 'no_warnings': True,
+                'cookiefile': 'cookies.txt',
             }
 
             def download_with_ytdlp():
